@@ -233,41 +233,68 @@ echo -e "${GREEN}[7/10] 安装 acme.sh...${NC}"
 ACME_DIR=$(mktemp -d)
 ACME_INSTALLER="${ACME_DIR}/acme.sh"
 
+# 检查下载内容是否有效
+check_installer() {
+    local file="$1"
+    # 检查文件大小
+    local size=$(stat -c%s "$file" 2>/dev/null || stat -f%z "$file" 2>/dev/null)
+    if [[ "$size" -lt 50000 ]]; then
+        echo -e "${YELLOW}[*] 文件太小 ($size bytes)，可能是错误页面${NC}"
+        return 1
+    fi
+    # 检查是否是 HTML
+    if head -c 200 "$file" | grep -qi '<html\|<!doctype\|<!DOCTYPE'; then
+        echo -e "${YELLOW}[*] 检测到 HTML 内容，可能是重定向页面${NC}"
+        return 1
+    fi
+    # 检查是否有 shell 脚本特征
+    if ! head -c 50 "$file" | grep -q '#!'; then
+        echo -e "${YELLOW}[*] 不是有效的 shell 脚本${NC}"
+        return 1
+    fi
+    return 0
+}
+
 # 尝试多个下载源
 download_acme() {
+    # 源1: get.acme.sh
     echo -e "${YELLOW}[*] 尝试从 get.acme.sh 下载...${NC}"
-    if curl -sL https://get.acme.sh -o "$ACME_INSTALLER" --max-time 30 2>/dev/null; then
-        return 0
+    if wget -q --timeout=30 -O "$ACME_INSTALLER" https://get.acme.sh 2>&1; then
+        if check_installer "$ACME_INSTALLER"; then
+            echo -e "${GREEN}[*] get.acme.sh 下载成功${NC}"
+            return 0
+        fi
     fi
+
+    # 源2: GitHub raw
     echo -e "${YELLOW}[*] 尝试从 GitHub 下载...${NC}"
-    if curl -sL https://raw.githubusercontent.com/acmesh-official/acme.sh/master/acme.sh -o "$ACME_INSTALLER" --max-time 30 2>/dev/null; then
-        return 0
+    if wget -q --timeout=30 -O "$ACME_INSTALLER" https://raw.githubusercontent.com/acmesh-official/acme.sh/master/acme.sh 2>&1; then
+        if check_installer "$ACME_INSTALLER"; then
+            echo -e "${GREEN}[*] GitHub 下载成功${NC}"
+            return 0
+        fi
     fi
+
+    # 源3: 备用镜像
+    echo -e "${YELLOW}[*] 尝试从备用镜像下载...${NC}"
+    if wget -q --timeout=30 -O "$ACME_INSTALLER" https://cdn.jsdelivr.net/gh/acmesh-official/acme.sh@master/acme.sh 2>&1; then
+        if check_installer "$ACME_INSTALLER"; then
+            echo -e "${GREEN}[*] 镜像下载成功${NC}"
+            return 0
+        fi
+    fi
+
     return 1
 }
 
 if ! download_acme; then
-    echo -e "${RED}[错误] acme.sh 下载失败${NC}"
+    echo -e "${RED}[错误] acme.sh 从所有源下载均失败${NC}"
+    echo -e "${YELLOW}[提示] 请检查网络连接，或手动安装 acme.sh:${NC}"
+    echo -e "  wget -O - https://get.acme.sh | sh"
     rm -rf "$ACME_DIR"
     exit 1
 fi
 
-# 检查下载内容是否为 HTML (被跳转或错误)
-if head -c 200 "$ACME_INSTALLER" | grep -qi '<html\|<!doctype'; then
-    echo -e "${RED}[错误] acme.sh 下载失败，获取到的是 HTML 页面${NC}"
-    rm -rf "$ACME_DIR"
-    exit 1
-fi
-
-# 检查文件大小 (应该大于 50KB)
-FILE_SIZE=$(stat -c%s "$ACME_INSTALLER" 2>/dev/null || stat -f%z "$ACME_INSTALLER" 2>/dev/null)
-if [[ "$FILE_SIZE" -lt 50000 ]]; then
-    echo -e "${RED}[错误] acme.sh 下载失败，文件太小 ($FILE_SIZE bytes)${NC}"
-    rm -rf "$ACME_DIR"
-    exit 1
-fi
-
-echo -e "${GREEN}[*] acme.sh 下载成功 ($FILE_SIZE bytes)${NC}"
 chmod +x "$ACME_INSTALLER"
 
 # 在临时目录执行安装（安装脚本需要从当前目录复制自己）
