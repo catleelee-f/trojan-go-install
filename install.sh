@@ -94,12 +94,12 @@ fi
 # ==================== 交互式输入 ====================
 if [[ -z "$DOMAIN" ]]; then
     echo -e "${YELLOW}[?] 请输入你的域名 (例: vpn.example.com):${NC}"
-    read -p "域名: " DOMAIN
+    read -r DOMAIN
 fi
 
 if [[ -z "$CF_TOKEN" ]]; then
     echo -e "${YELLOW}[?] 请输入 Cloudflare API Token:${NC}"
-    read -p "Token: " CF_TOKEN
+    read -r CF_TOKEN
 fi
 
 # ==================== 域名格式严格验证 ====================
@@ -182,7 +182,6 @@ nginx -t && systemctl restart nginx
 
 # ==================== 安装 Trojan-Go ====================
 echo -e "${GREEN}[6/10] 下载安装 Trojan-Go...${NC}"
-cd /tmp
 TROJAN_VER="v0.10.6"
 ARCH=$(uname -m)
 
@@ -202,34 +201,36 @@ case "$ARCH" in
 esac
 
 TROJAN_URL="https://github.com/p4gefau1t/trojan-go/releases/download/${TROJAN_VER}/trojan-go-linux-${ARCH_STR}.zip"
+TROJAN_ZIP=$(mktemp)
 
 echo -e "${YELLOW}[*] 下载: $TROJAN_URL${NC}"
-wget -q "$TROJAN_URL" -O trojan-go.zip
+wget -q "$TROJAN_URL" -O "$TROJAN_ZIP"
 
 # 验证文件存在
-if [[ ! -f trojan-go.zip ]]; then
+if [[ ! -f "$TROJAN_ZIP" ]]; then
     echo -e "${RED}[错误] 下载失败${NC}"
+    rm -f "$TROJAN_ZIP"
     exit 1
 fi
 
 # 文件大小检查 (应该大于 1MB)
-FILE_SIZE=$(stat -c%s trojan-go.zip 2>/dev/null || stat -f%z trojan-go.zip 2>/dev/null)
+FILE_SIZE=$(stat -c%s "$TROJAN_ZIP" 2>/dev/null || stat -f%z "$TROJAN_ZIP" 2>/dev/null)
 if [[ "$FILE_SIZE" -lt 1048576 ]]; then
     echo -e "${RED}[错误] 下载的文件太小，可能不完整${NC}"
-    rm -f trojan-go.zip
+    rm -f "$TROJAN_ZIP"
     exit 1
 fi
 
-unzip -o trojan-go.zip
-mv trojan-go /usr/local/bin/trojan-go
+unzip -o "$TROJAN_ZIP" -d /usr/local/bin/
 chmod +x /usr/local/bin/trojan-go
 mkdir -p /etc/trojan-go
+rm -f "$TROJAN_ZIP"
 
 # ==================== 安全安装 acme.sh ====================
 echo -e "${GREEN}[7/10] 安装 acme.sh...${NC}"
 
-# 先下载到临时文件
-ACME_INSTALLER="/tmp/acme.shinstaller"
+# 使用 mktemp 创建安全的临时文件
+ACME_INSTALLER=$(mktemp)
 wget -q "https://raw.githubusercontent.com/acmesh-official/acme.sh/master/acme.sh" -O "$ACME_INSTALLER"
 
 # 检查下载内容是否为 HTML (被跳转或错误)
@@ -257,10 +258,10 @@ echo -e "${GREEN}[*] 注册 acme.sh 账号...${NC}"
 # ==================== 申请 SSL 证书 (使用文件存储 Token) ====================
 echo -e "${GREEN}[8/10] 申请 SSL 证书 for $DOMAIN ...${NC}"
 
-# 将 CF Token 写入文件，避免环境变量暴露
-CF_TOKEN_FILE="/tmp/cf_token_$$"
-echo "CF_Token=$CF_TOKEN" > "$CF_TOKEN_FILE"
+# 使用 mktemp 创建安全的临时文件，避免 symlink 攻击
+CF_TOKEN_FILE=$(mktemp)
 chmod 600 "$CF_TOKEN_FILE"
+echo "CF_Token=$CF_TOKEN" > "$CF_TOKEN_FILE"
 
 # 申请证书
 /root/.acme.sh/acme.sh --issue --dns dns_cf -d "$DOMAIN" --force || {
