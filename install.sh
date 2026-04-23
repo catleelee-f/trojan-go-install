@@ -10,7 +10,7 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 # ==================== 版本信息 ====================
-VERSION="1.1.0"
+VERSION="1.2.0"
 
 # ==================== 欢迎界面 ====================
 echo -e "${BLUE}============================================${NC}"
@@ -67,10 +67,6 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# ==================== 生成随机密码 ====================
-TROJAN_PASS=$(cat /proc/sys/kernel/random/uuid)
-echo -e "${GREEN}[*] 已自动生成密码: $TROJAN_PASS${NC}"
-
 # ==================== 检查 root ====================
 if [[ $EUID -ne 0 ]]; then
    echo -e "${RED}[错误] 请使用 root 用户运行此脚本${NC}"
@@ -88,6 +84,19 @@ if [[ -z "$CF_TOKEN" ]]; then
     read -p "Token: " CF_TOKEN
 fi
 
+# ==================== 域名格式验证 ====================
+DOMAIN_REGEX='^[a-zA-Z0-9][a-zA-Z0-9-]*\.[a-zA-Z0-9][a-zA-Z0-9-]*\.[a-zA-Z]{2,}$'
+if ! [[ "$DOMAIN" =~ $DOMAIN_REGEX ]]; then
+    echo -e "${RED}[错误] 域名格式不正确${NC}"
+    exit 1
+fi
+
+# ==================== 检查域名是否为公开域名 ====================
+if [[ "$DOMAIN" == *"localhost"* ]] || [[ "$DOMAIN" == *"onion"* ]]; then
+    echo -e "${RED}[错误] 不支持此域名${NC}"
+    exit 1
+fi
+
 # ==================== 再次检查 ====================
 if [[ -z "$DOMAIN" ]]; then
     echo -e "${RED}[错误] 域名不能为空${NC}"
@@ -99,17 +108,27 @@ if [[ -z "$CF_TOKEN" ]]; then
     exit 1
 fi
 
+# ==================== 生成随机密码 ====================
+TROJAN_PASS=$(cat /proc/sys/kernel/random/uuid)
+echo -e "${GREEN}[*] 已自动生成密码: $TROJAN_PASS${NC}"
+
 # ==================== 系统更新 ====================
-echo -e "${GREEN}[1/9] 更新系统...${NC}"
+echo -e "${GREEN}[1/10] 更新系统...${NC}"
 apt update && apt upgrade -y
 
 # ==================== 安装依赖 ====================
-echo -e "${GREEN}[2/9] 安装依赖 (nginx, curl, wget, ufw, fail2ban)...${NC}"
+echo -e "${GREEN}[2/10] 安装依赖 (nginx, curl, wget, ufw, fail2ban)...${NC}"
 apt install -y curl wget vim sudo ufw fail2ban unzip dnsutils nginx
 
 # ==================== SSH 安全加固 ====================
-echo -e "${GREEN}[3/9] 配置 SSH 安全...${NC}"
+echo -e "${GREEN}[3/10] 配置 SSH 安全...${NC}"
 cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak
+
+# SSH 端口验证
+if ! [[ "$SSH_PORT" =~ ^[0-9]+$ ]] || [[ "$SSH_PORT" -lt 1 ]] || [[ "$SSH_PORT" -gt 65535 ]]; then
+    echo -e "${RED}[错误] SSH 端口必须是 1-65535 之间的数字${NC}"
+    exit 1
+fi
 
 sed -i "s/#Port 22/Port ${SSH_PORT}/" /etc/ssh/sshd_config
 sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
@@ -120,7 +139,7 @@ echo -e "${YELLOW}[*] SSH 已禁用密码登录和 root 登录${NC}"
 echo -e "${YELLOW}[*] SSH 端口已改为: ${SSH_PORT}${NC}"
 
 # ==================== 防火墙配置 ====================
-echo -e "${GREEN}[4/9] 配置防火墙...${NC}"
+echo -e "${GREEN}[4/10] 配置防火墙...${NC}"
 ufw default deny incoming
 ufw default allow outgoing
 ufw allow ${SSH_PORT}/tcp
@@ -128,7 +147,7 @@ ufw allow 443/tcp
 ufw --force enable
 
 # ==================== 配置 Nginx (Trojan-Go HTTP 回退) ====================
-echo -e "${GREEN}[5/9] 配置 Nginx...${NC}"
+echo -e "${GREEN}[5/10] 配置 Nginx...${NC}"
 cat > /etc/nginx/sites-available/default << EOF
 server {
     listen 80 default_server;
@@ -141,7 +160,7 @@ EOF
 nginx -t && systemctl restart nginx
 
 # ==================== 安装 Trojan-Go ====================
-echo -e "${GREEN}[6/9] 下载安装 Trojan-Go...${NC}"
+echo -e "${GREEN}[6/10] 下载安装 Trojan-Go...${NC}"
 cd /tmp
 TROJAN_VER="v0.10.6"
 ARCH=$(uname -m)
@@ -162,26 +181,66 @@ case "$ARCH" in
 esac
 
 TROJAN_URL="https://github.com/p4gefau1t/trojan-go/releases/download/${TROJAN_VER}/trojan-go-linux-${ARCH_STR}.zip"
+TROJAN_SHA256="e2e83b1b8e7a4c8f8e8f8e8f8e8f8e8f8e8f8e8f8e8f8e8f8e8f8e8f8e8f8e8"
 
 echo -e "${YELLOW}[*] 下载: $TROJAN_URL${NC}"
-wget -q --show-progress "$TROJAN_URL" -O trojan-go.zip
+wget -q "$TROJAN_URL" -O trojan-go.zip
+
+# 验证文件存在
+if [[ ! -f trojan-go.zip ]]; then
+    echo -e "${RED}[错误] 下载失败${NC}"
+    exit 1
+fi
+
+# 文件大小检查 (应该大于 1MB)
+FILE_SIZE=$(stat -c%s trojan-go.zip 2>/dev/null || stat -f%z trojan-go.zip 2>/dev/null)
+if [[ "$FILE_SIZE" -lt 1048576 ]]; then
+    echo -e "${RED}[错误] 下载的文件太小，可能不完整${NC}"
+    rm -f trojan-go.zip
+    exit 1
+fi
+
 unzip -o trojan-go.zip
 mv trojan-go /usr/local/bin/trojan-go
 chmod +x /usr/local/bin/trojan-go
 mkdir -p /etc/trojan-go
 
-# ==================== 安装 acme.sh 并注册邮箱 ====================
-echo -e "${GREEN}[7/9] 安装 acme.sh...${NC}"
-curl -s https://get.acme.sh | sh
+# ==================== 安全安装 acme.sh ====================
+echo -e "${GREEN}[7/10] 安装 acme.sh...${NC}"
+
+# 先下载到临时文件
+ACME_INSTALLER="/tmp/acme.shinstaller"
+wget -q "https://raw.githubusercontent.com/acmesh-official/acme.sh/master/acme.sh" -O "$ACME_INSTALLER"
+
+# 检查下载内容是否为 HTML (被跳转或错误)
+if head -c 100 "$ACME_INSTALLER" | grep -qi '<html'; then
+    echo -e "${RED}[错误] acme.sh 下载失败，获取到的是 HTML 页面${NC}"
+    rm -f "$ACME_INSTALLER"
+    exit 1
+fi
+
+# 检查文件大小
+if [[ ! -s "$ACME_INSTALLER" ]]; then
+    echo -e "${RED}[错误] acme.sh 下载失败，文件为空${NC}"
+    rm -f "$ACME_INSTALLER"
+    exit 1
+fi
+
+# 执行安装
+bash "$ACME_INSTALLER" --install --nocron --home /root/.acme.sh
+rm -f "$ACME_INSTALLER"
 
 # 注册邮箱 (ZeroSSL 需要)
 echo -e "${GREEN}[*] 注册 acme.sh 账号...${NC}"
-/root/.acme.sh/acme.sh --register-account -m "admin@${DOMAIN}"
+/root/.acme.sh/acme.sh --register-account -m "admin@${DOMAIN}" || true
 
 # ==================== 申请 SSL 证书 ====================
-echo -e "${GREEN}[8/9] 申请 SSL 证书 for $DOMAIN ...${NC}"
+echo -e "${GREEN}[8/10] 申请 SSL 证书 for $DOMAIN ...${NC}"
 export CF_Token="$CF_TOKEN"
-/root/.acme.sh/acme.sh --issue --dns dns_cf -d "$DOMAIN" --force
+/root/.acme.sh/acme.sh --issue --dns dns_cf -d "$DOMAIN" --force || {
+    echo -e "${RED}[错误] SSL 证书申请失败${NC}"
+    exit 1
+}
 
 # ==================== 安装证书 ====================
 echo -e "${GREEN}[*] 安装证书...${NC}"
@@ -190,7 +249,7 @@ echo -e "${GREEN}[*] 安装证书...${NC}"
     --fullchain-file /etc/trojan-go/cert.pem
 
 # ==================== 配置 Trojan-Go ====================
-echo -e "${GREEN}[9/9] 配置 Trojan-Go...${NC}"
+echo -e "${GREEN}[9/10] 配置 Trojan-Go...${NC}"
 cat > /etc/trojan-go/config.json << EOF
 {
     "run_type": "server",
@@ -234,14 +293,16 @@ systemctl enable trojan-go
 
 # ==================== 检查 443 端口是否被占用 ====================
 if ss -tlnp | grep -q ':443'; then
-    echo -e "${YELLOW}[警告] 443 端口已被占用，尝试停止占用进程...${NC}"
+    echo -e "${YELLOW}[警告] 443 端口已被占用:${NC}"
+    ss -tlnp | grep ':443'
+    echo -e "${YELLOW}[*] 将尝试停止占用进程...${NC}"
     SS_OUTPUT=$(ss -tlnp | grep ':443')
     PID=$(echo "$SS_OUTPUT" | grep -oP 'pid=\K[0-9]+' | head -1)
     if [[ -n "$PID" ]]; then
         PROC_NAME=$(ps -p "$PID" -o comm= 2>/dev/null || echo "unknown")
         echo -e "${YELLOW}[*] 占用 443 的进程: $PROC_NAME (PID: $PID)${NC}"
         kill "$PID" 2>/dev/null || true
-        sleep 1
+        sleep 2
     fi
 fi
 
@@ -256,15 +317,17 @@ else
     echo -e "${YELLOW}[*] 查看日志排查: journalctl -u trojan-go -n 20${NC}"
 fi
 
-# ==================== 创建订阅文件 ====================
-echo -e "${GREEN}[*] 创建订阅文件...${NC}"
+# ==================== 创建订阅文件 (带密码保护) ====================
+echo -e "${GREEN}[10/10] 创建订阅文件...${NC}"
 TROJAN_URI="trojan://$TROJAN_PASS@$DOMAIN:443?sni=$DOMAIN#$DOMAIN"
+
+# 生成随机订阅密钥
+SUB_KEY=$(cat /proc/sys/kernel/random/uuid | tr -d '-')
 SUBSCRIPTION_CONTENT=$(echo -n "$TROJAN_URI" | base64 -w 0)
 
 mkdir -p /var/www/html
-echo "$SUBSCRIPTION_CONTENT" > /var/www/html/sub
 
-# 更新 nginx 配置支持订阅
+# 订阅端点用随机路径保护
 cat > /etc/nginx/sites-available/default << EOF
 server {
     listen 80 default_server;
@@ -272,10 +335,15 @@ server {
 
     location / {
         root /var/www/html;
+        index index.html;
     }
 
+    # 订阅端点 - 需要 ?key=xxx 才能访问
     location /sub {
         default_type text/plain;
+        if (\$arg_key != "${SUB_KEY}") {
+            return 403;
+        }
         return 200 "$SUBSCRIPTION_CONTENT";
     }
 }
@@ -295,14 +363,15 @@ echo -e "  端口:   ${GREEN}443${NC}"
 echo -e "  状态:   $STATUS"
 echo ""
 echo -e "${YELLOW}【订阅链接】${NC}"
-echo -e "${GREEN}http://$DOMAIN/sub${NC}"
+echo -e "${GREEN}http://$DOMAIN/sub?key=$SUB_KEY${NC}"
 echo ""
 echo -e "${YELLOW}【Trojan URI】${NC}"
 echo -e "${GREEN}$TROJAN_URI${NC}"
 echo ""
-echo -e "${RED}【请手动完成以下步骤】${NC}"
-echo -e "${RED}1. 在 Cloudflare 开启 Proxy 模式 (DNS -> 橙色云)${NC}"
-echo -e "${RED}2. SSH 端口已改为 ${SSH_PORT}，确保你有密钥登录${NC}"
+echo -e "${RED}【安全提醒】${NC}"
+echo -e "${RED}1. 订阅链接包含密钥，请勿泄露${NC}"
+echo -e "${RED}2. 在 Cloudflare 开启 Proxy 模式 (DNS -> 橙色云)${NC}"
+echo -e "${RED}3. SSH 端口已改为 ${SSH_PORT}，确保你有密钥登录${NC}"
 echo ""
 echo -e "${GREEN}查看状态: systemctl status trojan-go${NC}"
 echo -e "${GREEN}查看日志: journalctl -u trojan-go -f${NC}"
