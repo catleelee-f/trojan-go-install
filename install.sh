@@ -10,7 +10,7 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 # ==================== 版本信息 ====================
-VERSION="1.2.0"
+VERSION="1.3.0"
 
 # ==================== 欢迎界面 ====================
 echo -e "${BLUE}============================================${NC}"
@@ -181,7 +181,6 @@ case "$ARCH" in
 esac
 
 TROJAN_URL="https://github.com/p4gefau1t/trojan-go/releases/download/${TROJAN_VER}/trojan-go-linux-${ARCH_STR}.zip"
-TROJAN_SHA256="e2e83b1b8e7a4c8f8e8f8e8f8e8f8e8f8e8f8e8f8e8f8e8f8e8f8e8f8e8f8e8"
 
 echo -e "${YELLOW}[*] 下载: $TROJAN_URL${NC}"
 wget -q "$TROJAN_URL" -O trojan-go.zip
@@ -234,13 +233,23 @@ rm -f "$ACME_INSTALLER"
 echo -e "${GREEN}[*] 注册 acme.sh 账号...${NC}"
 /root/.acme.sh/acme.sh --register-account -m "admin@${DOMAIN}" || true
 
-# ==================== 申请 SSL 证书 ====================
+# ==================== 申请 SSL 证书 (使用文件存储 Token) ====================
 echo -e "${GREEN}[8/10] 申请 SSL 证书 for $DOMAIN ...${NC}"
-export CF_Token="$CF_TOKEN"
+
+# 将 CF Token 写入文件，避免环境变量暴露
+CF_TOKEN_FILE="/tmp/cf_token_$$"
+echo "CF_Token=$CF_TOKEN" > "$CF_TOKEN_FILE"
+chmod 600 "$CF_TOKEN_FILE"
+
+# 申请证书
 /root/.acme.sh/acme.sh --issue --dns dns_cf -d "$DOMAIN" --force || {
+    rm -f "$CF_TOKEN_FILE"
     echo -e "${RED}[错误] SSL 证书申请失败${NC}"
     exit 1
 }
+
+# 清理 Token 文件
+rm -f "$CF_TOKEN_FILE"
 
 # ==================== 安装证书 ====================
 echo -e "${GREEN}[*] 安装证书...${NC}"
@@ -317,37 +326,52 @@ else
     echo -e "${YELLOW}[*] 查看日志排查: journalctl -u trojan-go -n 20${NC}"
 fi
 
-# ==================== 创建订阅文件 (带密码保护) ====================
+# ==================== 创建订阅文件 (端点鉴权) ====================
 echo -e "${GREEN}[10/10] 创建订阅文件...${NC}"
 TROJAN_URI="trojan://$TROJAN_PASS@$DOMAIN:443?sni=$DOMAIN#$DOMAIN"
-
-# 生成随机订阅密钥
-SUB_KEY=$(cat /proc/sys/kernel/random/uuid | tr -d '-')
 SUBSCRIPTION_CONTENT=$(echo -n "$TROJAN_URI" | base64 -w 0)
+
+# 生成随机订阅密钥 (用于验证请求头)
+SUB_KEY=$(cat /proc/sys/kernel/random/uuid | tr -d '-')
 
 mkdir -p /var/www/html
 
-# 订阅端点用随机路径保护
-cat > /etc/nginx/sites-available/default << EOF
+# 使用路径 + 请求头验证订阅，避免密钥暴露在 URL 中
+# 订阅地址: /sub/<key>  访问时需要在请求头添加 X-Sub-Key: <key>
+cat > /etc/nginx/sites-available/default << 'NGINXEOF'
 server {
     listen 80 default_server;
-    server_name ${DOMAIN};
+    server_name DOMAIN_PLACEHOLDER;
 
     location / {
         root /var/www/html;
         index index.html;
     }
 
-    # 订阅端点 - 需要 ?key=xxx 才能访问
-    location /sub {
+    # 订阅端点 - 使用 X-Sub-Key 请求头验证
+    # 访问地址: /sub/<random_key>
+    location ~ ^/sub/([a-zA-Z0-9]+)$ {
         default_type text/plain;
-        if (\$arg_key != "${SUB_KEY}") {
+        if ($http_x_sub_key != "SUB_KEY_PLACEHOLDER") {
             return 403;
         }
-        return 200 "$SUBSCRIPTION_CONTENT";
+        # 限速: 每分钟最多 10 次
+        limit_req zone=subscription burst=5 nodelay;
+        return 200 "SUBSCRIPTION_PLACEHOLDER";
     }
 }
-EOF
+NGINXEOF
+
+# 替换占位符
+sed -i "s/DOMAIN_PLACEHOLDER/$DOMAIN/g" /etc/nginx/sites-available/default
+sed -i "s/SUB_KEY_PLACEHOLDER/$SUB_KEY/g" /etc/nginx/sites-available/default
+sed -i "s/SUBSCRIPTION_PLACEHOLDER/$SUBSCRIPTION_CONTENT/g" /etc/nginx/sites-available/default
+
+# 添加限速 zone 到 http block
+if ! grep -q "limit_req_zone" /etc/nginx/nginx.conf 2>/dev/null; then
+    sed -i '/http {/a\    limit_req_zone $binary_remote_addr zone=subscription:10m rate=10r/m;' /etc/nginx/nginx.conf
+fi
+
 nginx -t && systemctl reload nginx
 
 # ==================== 安装完成 ====================
@@ -363,13 +387,17 @@ echo -e "  端口:   ${GREEN}443${NC}"
 echo -e "  状态:   $STATUS"
 echo ""
 echo -e "${YELLOW}【订阅链接】${NC}"
-echo -e "${GREEN}http://$DOMAIN/sub?key=$SUB_KEY${NC}"
+echo -e "${GREEN}http://$DOMAIN/sub/$SUB_KEY${NC}"
+echo ""
+echo -e "${YELLOW}【订阅使用方式】${NC}"
+echo -e "在客户端添加订阅时，需在请求头中设置:"
+echo -e "  Header: ${GREEN}X-Sub-Key: $SUB_KEY${NC}"
 echo ""
 echo -e "${YELLOW}【Trojan URI】${NC}"
 echo -e "${GREEN}$TROJAN_URI${NC}"
 echo ""
 echo -e "${RED}【安全提醒】${NC}"
-echo -e "${RED}1. 订阅链接包含密钥，请勿泄露${NC}"
+echo -e "${RED}1. 订阅链接和密钥请勿泄露${NC}"
 echo -e "${RED}2. 在 Cloudflare 开启 Proxy 模式 (DNS -> 橙色云)${NC}"
 echo -e "${RED}3. SSH 端口已改为 ${SSH_PORT}，确保你有密钥登录${NC}"
 echo ""
