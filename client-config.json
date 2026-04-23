@@ -1,0 +1,17 @@
+{
+  "run_type": "client",
+  "local_addr": "127.0.0.1",
+  "local_port": 1080,
+  "remote_addr": "vpn.example.com",
+  "remote_port": 443,
+  "password": ["YOUR_PASSWORD_HERE"],
+  "ssl": {
+    "sni": "vpn.example.com",
+    "verify": true,
+    "verify_hostname": true,
+    "cert": ""
+  },
+  "router": {
+    "enabled": false
+  }
+}
