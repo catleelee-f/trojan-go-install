@@ -26,7 +26,6 @@ show_help() {
     echo "选项:"
     echo "  -d, --domain DOMAIN       设置域名 (可留空交互式输入)"
     echo "  -t, --token TOKEN         Cloudflare API Token (可留空交互式输入)"
-    echo "  -p, --password PASSWORD   Trojan 密码 (留空自动生成)"
     echo "  -s, --ssh-port PORT       SSH 端口 (默认: 22)"
     echo "  -h, --help                显示此帮助信息"
     echo ""
@@ -34,12 +33,12 @@ show_help() {
     echo "  bash install.sh                                    # 交互式输入"
     echo "  bash install.sh -d vpn.example.com -t YOUR_CF_TOKEN # 命令行参数"
     echo ""
+    echo "注意: Trojan 密码会自动生成 UUID"
 }
 
 # ==================== 参数解析 ====================
 DOMAIN=""
 CF_TOKEN=""
-TROJAN_PASS=""
 SSH_PORT="22"
 
 while [[ $# -gt 0 ]]; do
@@ -50,10 +49,6 @@ while [[ $# -gt 0 ]]; do
             ;;
         -t|--token)
             CF_TOKEN="$2"
-            shift 2
-            ;;
-        -p|--password)
-            TROJAN_PASS="$2"
             shift 2
             ;;
         -s|--ssh-port)
@@ -71,6 +66,10 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# ==================== 生成随机密码 ====================
+TROJAN_PASS=$(cat /proc/sys/kernel/random/uuid)
+echo -e "${GREEN}[*] 已自动生成密码: $TROJAN_PASS${NC}"
 
 # ==================== 检查 root ====================
 if [[ $EUID -ne 0 ]]; then
@@ -98,12 +97,6 @@ fi
 if [[ -z "$CF_TOKEN" ]]; then
     echo -e "${RED}[错误] Cloudflare API Token 不能为空${NC}"
     exit 1
-fi
-
-# ==================== 生成随机密码 ====================
-if [[ -z "$TROJAN_PASS" ]]; then
-    TROJAN_PASS=$(cat /proc/sys/kernel/random/uuid)
-    echo -e "${GREEN}[*] 已自动生成密码: $TROJAN_PASS${NC}"
 fi
 
 # ==================== 系统更新 ====================
