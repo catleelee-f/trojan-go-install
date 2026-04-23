@@ -10,7 +10,7 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 # ==================== 版本信息 ====================
-VERSION="1.3.0"
+VERSION="1.4.0"
 
 # ==================== 欢迎界面 ====================
 echo -e "${BLUE}============================================${NC}"
@@ -34,6 +34,24 @@ show_help() {
     echo "  bash install.sh -d vpn.example.com -t YOUR_CF_TOKEN # 命令行参数"
     echo ""
     echo "注意: Trojan 密码会自动生成 UUID"
+}
+
+# ==================== 辅助函数 ====================
+
+# URL 安全 Base64 编码
+url_base64_encode() {
+    local input="$1"
+    echo -n "$input" | base64 | tr -d '=' | tr '+/' '-_'
+}
+
+# 转义 Nginx 配置字符串
+escape_nginx_string() {
+    local input="$1"
+    # 转义反斜杠、双引号、分号
+    input="${input//\\\\/\\\\\\\\}"
+    input="${input//\"/\\\\\"}"
+    input="${input//;/\\;}"
+    echo "$input"
 }
 
 # ==================== 参数解析 ====================
@@ -84,18 +102,21 @@ if [[ -z "$CF_TOKEN" ]]; then
     read -p "Token: " CF_TOKEN
 fi
 
-# ==================== 域名格式验证 ====================
-DOMAIN_REGEX='^[a-zA-Z0-9][a-zA-Z0-9-]*\.[a-zA-Z0-9][a-zA-Z0-9-]*\.[a-zA-Z]{2,}$'
+# ==================== 域名格式严格验证 ====================
+# 严格验证：只允许单级子域名 + 顶级域名
+DOMAIN_REGEX='^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?){1,2}$'
 if ! [[ "$DOMAIN" =~ $DOMAIN_REGEX ]]; then
     echo -e "${RED}[错误] 域名格式不正确${NC}"
     exit 1
 fi
 
-# ==================== 检查域名是否为公开域名 ====================
-if [[ "$DOMAIN" == *"localhost"* ]] || [[ "$DOMAIN" == *"onion"* ]]; then
-    echo -e "${RED}[错误] 不支持此域名${NC}"
-    exit 1
-fi
+# 检查域名是否为公开域名（排除特殊域名）
+case "$DOMAIN" in
+    *localhost*|*onion*|*invalid*|*test*)
+        echo -e "${RED}[错误] 不支持此域名${NC}"
+        exit 1
+        ;;
+esac
 
 # ==================== 再次检查 ====================
 if [[ -z "$DOMAIN" ]]; then
@@ -329,19 +350,35 @@ fi
 # ==================== 创建订阅文件 (端点鉴权) ====================
 echo -e "${GREEN}[10/10] 创建订阅文件...${NC}"
 TROJAN_URI="trojan://$TROJAN_PASS@$DOMAIN:443?sni=$DOMAIN#$DOMAIN"
-SUBSCRIPTION_CONTENT=$(echo -n "$TROJAN_URI" | base64 -w 0)
+
+# 使用 URL 安全 Base64 编码
+SUBSCRIPTION_CONTENT=$(url_base64_encode "$TROJAN_URI")
 
 # 生成随机订阅密钥 (用于验证请求头)
 SUB_KEY=$(cat /proc/sys/kernel/random/uuid | tr -d '-')
 
+# 转义订阅内容中的特殊字符
+SAFE_SUBSCRIPTION=$(escape_nginx_string "$SUBSCRIPTION_CONTENT")
+SAFE_DOMAIN=$(escape_nginx_string "$DOMAIN")
+SAFE_SUB_KEY=$(escape_nginx_string "$SUB_KEY")
+
 mkdir -p /var/www/html
 
+# 配置 Nginx 限速 (先修改 nginx.conf)
+if ! grep -q "limit_req_zone" /etc/nginx/nginx.conf 2>/dev/null; then
+    # 在 http block 末尾添加限速 zone
+    cat >> /etc/nginx/nginx.conf << 'EOF'
+
+# Rate limiting for subscription endpoint
+limit_req_zone $binary_remote_addr zone=subscription:10m rate=10r/m;
+EOF
+fi
+
 # 使用路径 + 请求头验证订阅，避免密钥暴露在 URL 中
-# 订阅地址: /sub/<key>  访问时需要在请求头添加 X-Sub-Key: <key>
-cat > /etc/nginx/sites-available/default << 'NGINXEOF'
+cat > /etc/nginx/sites-available/default << NGINXEOF
 server {
     listen 80 default_server;
-    server_name DOMAIN_PLACEHOLDER;
+    server_name ${SAFE_DOMAIN};
 
     location / {
         root /var/www/html;
@@ -352,25 +389,14 @@ server {
     # 访问地址: /sub/<random_key>
     location ~ ^/sub/([a-zA-Z0-9]+)$ {
         default_type text/plain;
-        if ($http_x_sub_key != "SUB_KEY_PLACEHOLDER") {
+        if (\$http_x_sub_key != "${SAFE_SUB_KEY}") {
             return 403;
         }
-        # 限速: 每分钟最多 10 次
         limit_req zone=subscription burst=5 nodelay;
-        return 200 "SUBSCRIPTION_PLACEHOLDER";
+        return 200 "${SAFE_SUBSCRIPTION}";
     }
 }
 NGINXEOF
-
-# 替换占位符
-sed -i "s/DOMAIN_PLACEHOLDER/$DOMAIN/g" /etc/nginx/sites-available/default
-sed -i "s/SUB_KEY_PLACEHOLDER/$SUB_KEY/g" /etc/nginx/sites-available/default
-sed -i "s/SUBSCRIPTION_PLACEHOLDER/$SUBSCRIPTION_CONTENT/g" /etc/nginx/sites-available/default
-
-# 添加限速 zone 到 http block
-if ! grep -q "limit_req_zone" /etc/nginx/nginx.conf 2>/dev/null; then
-    sed -i '/http {/a\    limit_req_zone $binary_remote_addr zone=subscription:10m rate=10r/m;' /etc/nginx/nginx.conf
-fi
 
 nginx -t && systemctl reload nginx
 
