@@ -7,6 +7,7 @@
 - TLS 1.3 加密流量，难以被识别和阻断
 - Cloudflare CDN 隐藏真实 VPS IP，防止被墙
 - BBR 拥塞控制，优化弱网环境（高延迟/丢包）
+- Nginx HTTP 回退服务器，提升稳定性
 - SSH 密钥登录 + 禁用密码，提高安全性
 - UFW 防火墙，最小权限原则
 - UUID 格式强密码
@@ -24,7 +25,7 @@
 ### 方式一：直接下载执行（推荐）
 
 ```bash
-bash <(curl -sL https://raw.githubusercontent.com/YOUR_USERNAME/trojan-go-install/main/install.sh) \
+bash <(curl -sL https://raw.githubusercontent.com/catleelee-f/trojan-go-install/main/install.sh) \
   -d vpn.example.com \
   -t YOUR_CF_TOKEN
 ```
@@ -33,7 +34,7 @@ bash <(curl -sL https://raw.githubusercontent.com/YOUR_USERNAME/trojan-go-instal
 
 ```bash
 # 下载脚本
-curl -O https://raw.githubusercontent.com/YOUR_USERNAME/trojan-go-install/main/install.sh
+curl -O https://raw.githubusercontent.com/catleelee-f/trojan-go-install/main/install.sh
 chmod +x install.sh
 
 # 执行安装
@@ -74,7 +75,18 @@ sudo ./install.sh -d vpn.example.com -t YOUR_CF_TOKEN
 
 ## 客户端配置
 
-安装完成后，脚本会输出客户端配置 JSON，示例：
+安装完成后，脚本会输出 Trojan URI，可直接导入客户端。
+
+### Quantumult X
+
+复制输出的 URI：
+```
+trojan://密码@vpn.example.com:443?sni=vpn.example.com#vpn.example.com
+```
+
+在 Quantumult X 中粘贴即可自动识别。
+
+### 通用客户端配置
 
 ```json
 {
@@ -83,7 +95,7 @@ sudo ./install.sh -d vpn.example.com -t YOUR_CF_TOKEN
   "local_port": 1080,
   "remote_addr": "vpn.example.com",
   "remote_port": 443,
-  "password": ["your-password-here"],
+  "password": ["你的密码"],
   "ssl": {
     "sni": "vpn.example.com",
     "verify": true
@@ -96,7 +108,7 @@ sudo ./install.sh -d vpn.example.com -t YOUR_CF_TOKEN
 - **Windows**: [Trojan-Go Release](https://github.com/p4gefau1t/trojan-go/releases)
 - **Android**: Play Store 搜索 "Trojan-Go"
 - **macOS**: [Trojan-QT5](https://github.com/TheWanderingCoel/Trojan-QT5) 或 [ClashX](https://github.com/yichengchen/clashX)
-- **iOS**: Shadowrocket / Stash
+- **iOS**: Shadowrocket / Stash / Quantumult X
 
 ## 常用命令
 
@@ -121,10 +133,21 @@ bash uninstall.sh
 
 ### Q: 安装后无法连接？
 
-1. 检查 Cloudflare 是否开启了 Proxy 模式
+1. 检查 Cloudflare 是否开启了 Proxy 模式（橙色云）
 2. 检查防火墙是否开放 443 端口: `ufw status`
 3. 查看服务状态: `systemctl status trojan-go`
 4. 查看日志: `journalctl -u trojan-go -f`
+
+### Q: 443 端口被占用？
+
+脚本会自动检测并尝试停止占用 443 端口的进程。如需手动处理：
+```bash
+# 查看占用进程
+ss -tlnp | grep :443
+
+# 停止进程后重启
+systemctl restart trojan-go
+```
 
 ### Q: SSH 连接不上？
 
@@ -141,6 +164,15 @@ vim /etc/trojan-go/config.json
 # 重启服务
 systemctl restart trojan-go
 ```
+
+## Cloudflare CDN 说明
+
+开启 CDN 可以：
+- 隐藏真实 VPS IP，防止被墙
+- 优化跨境路由，降低抖动
+- 防止 DDoS 攻击
+
+开启方法：Cloudflare Dashboard → DNS → 点击 DNS 记录旁边的云朵变成橙色。
 
 ## 优化延迟/丢包
 
@@ -161,7 +193,7 @@ systemctl restart trojan-go
 
 ```bash
 # 下载卸载脚本
-curl -O https://raw.githubusercontent.com/YOUR_USERNAME/trojan-go-install/main/uninstall.sh
+curl -O https://raw.githubusercontent.com/catleelee-f/trojan-go-install/main/uninstall.sh
 chmod +x uninstall.sh
 sudo ./uninstall.sh
 ```

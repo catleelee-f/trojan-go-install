@@ -10,7 +10,7 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 # ==================== 版本信息 ====================
-VERSION="1.0.0"
+VERSION="1.1.0"
 
 # ==================== 欢迎界面 ====================
 echo -e "${BLUE}============================================${NC}"
@@ -100,18 +100,17 @@ if [[ -z "$TROJAN_PASS" ]]; then
 fi
 
 # ==================== 系统更新 ====================
-echo -e "${GREEN}[1/8] 更新系统...${NC}"
+echo -e "${GREEN}[1/9] 更新系统...${NC}"
 apt update && apt upgrade -y
 
 # ==================== 安装依赖 ====================
-echo -e "${GREEN}[2/8] 安装依赖...${NC}"
-apt install -y curl wget vim sudo ufw fail2ban unzip dnsutils
+echo -e "${GREEN}[2/9] 安装依赖 (nginx, curl, wget, ufw, fail2ban)...${NC}"
+apt install -y curl wget vim sudo ufw fail2ban unzip dnsutils nginx
 
 # ==================== SSH 安全加固 ====================
-echo -e "${GREEN}[3/8] 配置 SSH 安全...${NC}"
+echo -e "${GREEN}[3/9] 配置 SSH 安全...${NC}"
 cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak
 
-# 配置 SSH 端口和安全性
 sed -i "s/#Port 22/Port ${SSH_PORT}/" /etc/ssh/sshd_config
 sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
 sed -i 's/#PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config
@@ -121,15 +120,28 @@ echo -e "${YELLOW}[*] SSH 已禁用密码登录和 root 登录${NC}"
 echo -e "${YELLOW}[*] SSH 端口已改为: ${SSH_PORT}${NC}"
 
 # ==================== 防火墙配置 ====================
-echo -e "${GREEN}[4/8] 配置防火墙...${NC}"
+echo -e "${GREEN}[4/9] 配置防火墙...${NC}"
 ufw default deny incoming
 ufw default allow outgoing
 ufw allow ${SSH_PORT}/tcp
 ufw allow 443/tcp
 ufw --force enable
 
+# ==================== 配置 Nginx (Trojan-Go HTTP 回退) ====================
+echo -e "${GREEN}[5/9] 配置 Nginx...${NC}"
+cat > /etc/nginx/sites-available/default << EOF
+server {
+    listen 80 default_server;
+    server_name ${DOMAIN};
+    location / {
+        root /var/www/html;
+    }
+}
+EOF
+nginx -t && systemctl restart nginx
+
 # ==================== 安装 Trojan-Go ====================
-echo -e "${GREEN}[5/8] 下载安装 Trojan-Go...${NC}"
+echo -e "${GREEN}[6/9] 下载安装 Trojan-Go...${NC}"
 cd /tmp
 TROJAN_VER="v0.10.6"
 ARCH=$(uname -m)
@@ -158,14 +170,17 @@ mv trojan-go /usr/local/bin/trojan-go
 chmod +x /usr/local/bin/trojan-go
 mkdir -p /etc/trojan-go
 
-# ==================== 安装 acme.sh ====================
-echo -e "${GREEN}[6/8] 安装 acme.sh 并申请证书...${NC}"
+# ==================== 安装 acme.sh 并注册邮箱 ====================
+echo -e "${GREEN}[7/9] 安装 acme.sh...${NC}"
 curl -s https://get.acme.sh | sh
 
-# ==================== 申请 SSL 证书 ====================
-echo -e "${GREEN}[7/8] 申请 SSL 证书 for $DOMAIN ...${NC}"
-export CF_Token="$CF_TOKEN"
+# 注册邮箱 (ZeroSSL 需要)
+echo -e "${GREEN}[*] 注册 acme.sh 账号...${NC}"
+/root/.acme.sh/acme.sh --register-account -m "admin@${DOMAIN}"
 
+# ==================== 申请 SSL 证书 ====================
+echo -e "${GREEN}[8/9] 申请 SSL 证书 for $DOMAIN ...${NC}"
+export CF_Token="$CF_TOKEN"
 /root/.acme.sh/acme.sh --issue --dns dns_cf -d "$DOMAIN" --force
 
 # ==================== 安装证书 ====================
@@ -175,7 +190,7 @@ echo -e "${GREEN}[*] 安装证书...${NC}"
     --fullchain-file /etc/trojan-go/cert.pem
 
 # ==================== 配置 Trojan-Go ====================
-echo -e "${GREEN}[8/8] 配置 Trojan-Go...${NC}"
+echo -e "${GREEN}[9/9] 配置 Trojan-Go...${NC}"
 cat > /etc/trojan-go/config.json << EOF
 {
     "run_type": "server",
@@ -187,12 +202,7 @@ cat > /etc/trojan-go/config.json << EOF
     "ssl": {
         "cert": "/etc/trojan-go/cert.pem",
         "key": "/etc/trojan-go/private.key",
-        "sni": ["$DOMAIN"]
-    },
-    "router": {
-        "enabled": true,
-        "block": ["geoip:private"],
-        "proxy": ["geoip:cn"]
+        "sni": "$DOMAIN"
     }
 }
 EOF
@@ -221,7 +231,30 @@ EOF
 
 systemctl daemon-reload
 systemctl enable trojan-go
+
+# ==================== 检查 443 端口是否被占用 ====================
+if ss -tlnp | grep -q ':443'; then
+    echo -e "${YELLOW}[警告] 443 端口已被占用，尝试停止占用进程...${NC}"
+    SS_OUTPUT=$(ss -tlnp | grep ':443')
+    PID=$(echo "$SS_OUTPUT" | grep -oP 'pid=\K[0-9]+' | head -1)
+    if [[ -n "$PID" ]]; then
+        PROC_NAME=$(ps -p "$PID" -o comm= 2>/dev/null || echo "unknown")
+        echo -e "${YELLOW}[*] 占用 443 的进程: $PROC_NAME (PID: $PID)${NC}"
+        kill "$PID" 2>/dev/null || true
+        sleep 1
+    fi
+fi
+
 systemctl start trojan-go
+
+# ==================== 检查服务状态 ====================
+sleep 2
+if systemctl is-active --quiet trojan-go; then
+    STATUS="${GREEN}运行中${NC}"
+else
+    STATUS="${RED}启动失败${NC}"
+    echo -e "${YELLOW}[*] 查看日志排查: journalctl -u trojan-go -n 20${NC}"
+fi
 
 # ==================== 安装完成 ====================
 echo ""
@@ -233,23 +266,16 @@ echo -e "${YELLOW}【配置信息】${NC}"
 echo -e "  域名:   ${GREEN}$DOMAIN${NC}"
 echo -e "  密码:   ${GREEN}$TROJAN_PASS${NC}"
 echo -e "  端口:   ${GREEN}443${NC}"
+echo -e "  状态:   $STATUS"
 echo ""
-echo -e "${YELLOW}【Trojan-Go 客户端配置】${NC}"
-echo '{
-  "run_type": "client",
-  "local_addr": "127.0.0.1",
-  "local_port": 1080,
-  "remote_addr": "'"$DOMAIN"'",
-  "remote_port": 443,
-  "password": ["'"$TROJAN_PASS"'"],
-  "ssl": {
-    "sni": "'"$DOMAIN"'",
-    "verify": true
-  }
-}'
+echo -e "${YELLOW}【Trojan URI (导入客户端)】${NC}"
+echo -e "${GREEN}trojan://$TROJAN_PASS@$DOMAIN:443?sni=$DOMAIN#$DOMAIN${NC}"
+echo ""
+echo -e "${YELLOW}【Quantumult X 配置】${NC}"
+echo -e "trojan://$TROJAN_PASS@$DOMAIN:443?sni=$DOMAIN#$DOMAIN"
 echo ""
 echo -e "${RED}【请手动完成以下步骤】${NC}"
-echo -e "${RED}1. 在 Cloudflare 开启 Proxy 模式 (DNS -> 代理)${NC}"
+echo -e "${RED}1. 在 Cloudflare 开启 Proxy 模式 (DNS -> 橙色云)${NC}"
 echo -e "${RED}2. SSH 端口已改为 ${SSH_PORT}，确保你有密钥登录${NC}"
 echo ""
 echo -e "${GREEN}查看状态: systemctl status trojan-go${NC}"
