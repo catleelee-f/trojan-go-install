@@ -298,7 +298,6 @@ fi
 chmod +x "$ACME_INSTALLER"
 
 # 在临时目录执行安装（安装脚本需要从当前目录复制自己）
-# 使用 --force 参数确保重新安装
 (
     cd "$ACME_DIR"
     bash ./acme.sh --install --nocron --home /root/.acme.sh --force
@@ -308,17 +307,42 @@ chmod +x "$ACME_INSTALLER"
     exit 1
 }
 
-# 确保 dnsapi 已安装（Cloudflare DNS hook 需要这个）
-if [[ ! -f /root/.acme.sh/dnsapi/dns_cf.sh ]]; then
-    echo -e "${YELLOW}[*] 手动安装 Cloudflare DNS hook...${NC}"
-    mkdir -p /root/.acme.sh/dnsapi
-    wget -q --timeout=30 -O /root/.acme.sh/dnsapi/dns_cf.sh \
-        https://raw.githubusercontent.com/acmesh-official/acme.sh/master/dnsapi/dns_cf.sh || {
-        echo -e "${RED}[错误] Cloudflare DNS hook 安装失败${NC}"
-        rm -rf "$ACME_DIR"
-        exit 1
-    }
+# 安装完成后，dnsapi 目录可能不存在，需要手动下载 dns_cf.sh
+echo -e "${GREEN}[*] 手动安装 Cloudflare DNS hook...${NC}"
+mkdir -p /root/.acme.sh/dnsapi
+
+# 尝试多个源下载 dns_cf.sh
+DNS_CF_DOWNLOADED=false
+for url in \
+    "https://raw.githubusercontent.com/acmesh-official/acme.sh/master/dnsapi/dns_cf.sh" \
+    "https://cdn.jsdelivr.net/gh/acmesh-official/acme.sh@master/dnsapi/dns_cf.sh" \
+    "https://get.acme.sh/dnsapi/dns_cf.sh"; do
+    echo -e "${YELLOW}[*] 尝试从 $url 下载...${NC}"
+    if wget -q --timeout=30 -O /root/.acme.sh/dnsapi/dns_cf.sh "$url" 2>&1; then
+        if [[ -s /root/.acme.sh/dnsapi/dns_cf.sh ]]; then
+            echo -e "${GREEN}[*] Cloudflare DNS hook 下载成功${NC}"
+            DNS_CF_DOWNLOADED=true
+            break
+        fi
+    fi
+done
+
+if [[ "$DNS_CF_DOWNLOADED" != "true" ]]; then
+    echo -e "${RED}[错误] Cloudflare DNS hook 安装失败${NC}"
+    rm -rf "$ACME_DIR"
+    exit 1
 fi
+
+# 验证 dnsapi 文件存在
+if [[ ! -f /root/.acme.sh/dnsapi/dns_cf.sh ]]; then
+    echo -e "${RED}[错误] dns_cf.sh 文件不存在${NC}"
+    ls -la /root/.acme.sh/dnsapi/ 2>/dev/null || echo "dnsapi 目录不存在"
+    rm -rf "$ACME_DIR"
+    exit 1
+fi
+
+echo -e "${GREEN}[*] dnsapi 文件列表:${NC}"
+ls -la /root/.acme.sh/dnsapi/
 
 rm -rf "$ACME_DIR"
 
