@@ -298,14 +298,27 @@ fi
 chmod +x "$ACME_INSTALLER"
 
 # 在临时目录执行安装（安装脚本需要从当前目录复制自己）
+# 使用 --force 参数确保重新安装
 (
     cd "$ACME_DIR"
-    bash ./acme.sh --install --nocron --home /root/.acme.sh
+    bash ./acme.sh --install --nocron --home /root/.acme.sh --force
 ) || {
     echo -e "${RED}[错误] acme.sh 安装失败${NC}"
     rm -rf "$ACME_DIR"
     exit 1
 }
+
+# 确保 dnsapi 已安装（Cloudflare DNS hook 需要这个）
+if [[ ! -f /root/.acme.sh/dnsapi/dns_cf.sh ]]; then
+    echo -e "${YELLOW}[*] 手动安装 Cloudflare DNS hook...${NC}"
+    mkdir -p /root/.acme.sh/dnsapi
+    wget -q --timeout=30 -O /root/.acme.sh/dnsapi/dns_cf.sh \
+        https://raw.githubusercontent.com/acmesh-official/acme.sh/master/dnsapi/dns_cf.sh || {
+        echo -e "${RED}[错误] Cloudflare DNS hook 安装失败${NC}"
+        rm -rf "$ACME_DIR"
+        exit 1
+    }
+fi
 
 rm -rf "$ACME_DIR"
 
@@ -321,7 +334,11 @@ CF_TOKEN_FILE=$(mktemp)
 chmod 600 "$CF_TOKEN_FILE"
 echo "CF_Token=$CF_TOKEN" > "$CF_TOKEN_FILE"
 
+# 加载 acme.sh 环境并申请证书
+source /root/.acme.sh/acme.sh.env 2>/dev/null || true
+
 # 申请证书
+export CF_Token="$CF_TOKEN"
 /root/.acme.sh/acme.sh --issue --dns dns_cf -d "$DOMAIN" --force || {
     rm -f "$CF_TOKEN_FILE"
     echo -e "${RED}[错误] SSL 证书申请失败${NC}"
