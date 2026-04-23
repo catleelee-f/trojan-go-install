@@ -11,6 +11,7 @@
 - SSH 密钥登录 + 禁用密码，提高安全性
 - UFW 防火墙，最小权限原则
 - UUID 格式强密码
+- 订阅端点鉴权，防止密码泄露
 - 一键安装，开机自启
 
 ## 系统要求
@@ -25,9 +26,7 @@
 ### 方式一：直接下载执行（推荐）
 
 ```bash
-bash <(curl -sL https://raw.githubusercontent.com/catleelee-f/trojan-go-install/main/install.sh) \
-  -d vpn.example.com \
-  -t YOUR_CF_TOKEN
+bash <(curl -sL https://raw.githubusercontent.com/catleelee-f/trojan-go-install/main/install.sh)
 ```
 
 ### 方式二：下载到本地执行
@@ -37,19 +36,20 @@ bash <(curl -sL https://raw.githubusercontent.com/catleelee-f/trojan-go-install/
 curl -O https://raw.githubusercontent.com/catleelee-f/trojan-go-install/main/install.sh
 chmod +x install.sh
 
-# 执行安装
-sudo ./install.sh -d vpn.example.com -t YOUR_CF_TOKEN
+# 执行安装（交互式输入域名和Token）
+sudo ./install.sh
 ```
 
 ## 安装参数
 
 | 参数 | 缩写 | 说明 | 必需 |
 |------|------|------|------|
-| --domain | -d | 你的域名 | 是 |
-| --token | -t | Cloudflare API Token | 是 |
-| --password | -p | Trojan 密码（留空自动生成） | 否 |
+| --domain | -d | 你的域名 | 可交互输入 |
+| --token | -t | Cloudflare API Token | 可交互输入 |
 | --ssh-port | -s | SSH 端口（默认: 22） | 否 |
 | --help | -h | 显示帮助 | 否 |
+
+注意：Trojan 密码会自动生成 UUID，无需手动指定。
 
 ## 准备工作
 
@@ -75,16 +75,31 @@ sudo ./install.sh -d vpn.example.com -t YOUR_CF_TOKEN
 
 ## 客户端配置
 
-安装完成后，脚本会输出 Trojan URI，可直接导入客户端。
+安装完成后，脚本会输出订阅链接和 Trojan URI。
 
-### Quantumult X
+### 订阅方式（推荐）
 
-复制输出的 URI：
+安装后会输出订阅链接，格式如：
 ```
-trojan://密码@vpn.example.com:443?sni=vpn.example.com#vpn.example.com
+http://你的域名/sub/随机密钥
 ```
 
-在 Quantumult X 中粘贴即可自动识别。
+**使用订阅时需要在请求头中设置：**
+```
+X-Sub-Key: 随机密钥
+```
+
+不同的客户端设置方式不同：
+- **Quantumult X**: 订阅设置 → 高级 → 添加请求头
+- **Shadowrocket**: 订阅设置中支持自定义 Header
+- **Stash**: 支持在订阅配置中添加请求头
+
+### Trojan URI 方式
+
+直接复制脚本输出的 URI 导入客户端：
+```
+trojan://密码@域名:443?sni=域名#备注
+```
 
 ### 通用客户端配置
 
@@ -93,11 +108,11 @@ trojan://密码@vpn.example.com:443?sni=vpn.example.com#vpn.example.com
   "run_type": "client",
   "local_addr": "127.0.0.1",
   "local_port": 1080,
-  "remote_addr": "vpn.example.com",
+  "remote_addr": "你的域名",
   "remote_port": 443,
   "password": ["你的密码"],
   "ssl": {
-    "sni": "vpn.example.com",
+    "sni": "你的域名",
     "verify": true
   }
 }
@@ -109,6 +124,20 @@ trojan://密码@vpn.example.com:443?sni=vpn.example.com#vpn.example.com
 - **Android**: Play Store 搜索 "Trojan-Go"
 - **macOS**: [Trojan-QT5](https://github.com/TheWanderingCoel/Trojan-QT5) 或 [ClashX](https://github.com/yichengchen/clashX)
 - **iOS**: Shadowrocket / Stash / Quantumult X
+
+## VPS 安装路径
+
+| 文件/配置 | 路径 |
+|-----------|------|
+| Trojan-Go 程序 | `/usr/local/bin/trojan-go` |
+| Trojan-Go 配置 | `/etc/trojan-go/config.json` |
+| SSL 证书 | `/etc/trojan-go/cert.pem` |
+| SSL 私钥 | `/etc/trojan-go/private.key` |
+| Systemd 服务 | `/etc/systemd/system/trojan-go.service` |
+| acme.sh | `/root/.acme.sh/` |
+| Nginx 站点配置 | `/etc/nginx/sites-available/default` |
+| 订阅端点 | `/var/www/html/` |
+| 系统日志 | `journalctl -u trojan-go -f` |
 
 ## 常用命令
 
@@ -128,6 +157,22 @@ systemctl stop trojan-go
 # 卸载
 bash uninstall.sh
 ```
+
+## 安全特性
+
+本脚本在安全方面做了以下防护：
+
+| 安全措施 | 说明 |
+|----------|------|
+| `read -r` | 防止命令注入 |
+| `mktemp` | 防止临时文件 symlink 攻击 |
+| CF Token 文件存储 | Token 不进入环境变量 |
+| URL-safe Base64 | 订阅内容安全编码 |
+| Nginx 字符串转义 | 防止配置注入 |
+| 域名严格验证 | 防止恶意域名 |
+| SSH 禁用密码/root | 防止暴力破解 |
+| 订阅端点鉴权 | 路径+请求头双重验证 |
+| 订阅限速 | 防止资源耗尽攻击 |
 
 ## 常见问题
 
@@ -188,6 +233,7 @@ systemctl restart trojan-go
 2. **修改默认端口**: 安装时指定非标准 SSH 端口
 3. **定期更新**: 保持系统和 Trojan-Go 最新
 4. **启用 Fail2Ban**: 自动封禁暴力破解 IP
+5. **订阅密钥**: 切勿泄露给他人
 
 ## 卸载
 
