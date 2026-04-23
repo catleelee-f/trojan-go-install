@@ -229,9 +229,13 @@ rm -f "$TROJAN_ZIP"
 # ==================== 安全安装 acme.sh ====================
 echo -e "${GREEN}[7/10] 安装 acme.sh...${NC}"
 
-# 使用 mktemp 创建安全的临时文件
+# 使用官方推荐方式安装，同时用文件接收输出以便检查
 ACME_INSTALLER=$(mktemp)
-wget -q "https://raw.githubusercontent.com/acmesh-official/acme.sh/master/acme.sh" -O "$ACME_INSTALLER"
+if ! curl -sL https://get.acme.sh -o "$ACME_INSTALLER" 2>/dev/null; then
+    echo -e "${RED}[错误] acme.sh 下载失败${NC}"
+    rm -f "$ACME_INSTALLER"
+    exit 1
+fi
 
 # 检查下载内容是否为 HTML (被跳转或错误)
 if head -c 100 "$ACME_INSTALLER" | grep -qi '<html'; then
@@ -240,9 +244,10 @@ if head -c 100 "$ACME_INSTALLER" | grep -qi '<html'; then
     exit 1
 fi
 
-# 检查文件大小
-if [[ ! -s "$ACME_INSTALLER" ]]; then
-    echo -e "${RED}[错误] acme.sh 下载失败，文件为空${NC}"
+# 检查文件大小 (应该大于 50KB)
+FILE_SIZE=$(stat -c%s "$ACME_INSTALLER" 2>/dev/null || stat -f%z "$ACME_INSTALLER" 2>/dev/null)
+if [[ "$FILE_SIZE" -lt 50000 ]]; then
+    echo -e "${RED}[错误] acme.sh 下载失败，文件太小${NC}"
     rm -f "$ACME_INSTALLER"
     exit 1
 fi
