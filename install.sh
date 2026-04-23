@@ -229,18 +229,20 @@ rm -f "$TROJAN_ZIP"
 # ==================== 安全安装 acme.sh ====================
 echo -e "${GREEN}[7/10] 安装 acme.sh...${NC}"
 
-# 使用官方推荐方式安装，同时用文件接收输出以便检查
-ACME_INSTALLER=$(mktemp)
+# 下载到临时文件，命名为 acme.sh（安装脚本需要这个文件名）
+ACME_DIR=$(mktemp -d)
+ACME_INSTALLER="${ACME_DIR}/acme.sh"
+
 if ! curl -sL https://get.acme.sh -o "$ACME_INSTALLER" 2>/dev/null; then
     echo -e "${RED}[错误] acme.sh 下载失败${NC}"
-    rm -f "$ACME_INSTALLER"
+    rm -rf "$ACME_DIR"
     exit 1
 fi
 
 # 检查下载内容是否为 HTML (被跳转或错误)
 if head -c 100 "$ACME_INSTALLER" | grep -qi '<html'; then
     echo -e "${RED}[错误] acme.sh 下载失败，获取到的是 HTML 页面${NC}"
-    rm -f "$ACME_INSTALLER"
+    rm -rf "$ACME_DIR"
     exit 1
 fi
 
@@ -248,13 +250,23 @@ fi
 FILE_SIZE=$(stat -c%s "$ACME_INSTALLER" 2>/dev/null || stat -f%z "$ACME_INSTALLER" 2>/dev/null)
 if [[ "$FILE_SIZE" -lt 50000 ]]; then
     echo -e "${RED}[错误] acme.sh 下载失败，文件太小${NC}"
-    rm -f "$ACME_INSTALLER"
+    rm -rf "$ACME_DIR"
     exit 1
 fi
 
-# 执行安装
-bash "$ACME_INSTALLER" --install --nocron --home /root/.acme.sh
-rm -f "$ACME_INSTALLER"
+chmod +x "$ACME_INSTALLER"
+
+# 在临时目录执行安装（安装脚本需要从当前目录复制自己）
+(
+    cd "$ACME_DIR"
+    bash ./acme.sh --install --nocron --home /root/.acme.sh
+) || {
+    echo -e "${RED}[错误] acme.sh 安装失败${NC}"
+    rm -rf "$ACME_DIR"
+    exit 1
+}
+
+rm -rf "$ACME_DIR"
 
 # 注册邮箱 (ZeroSSL 需要)
 echo -e "${GREEN}[*] 注册 acme.sh 账号...${NC}"
