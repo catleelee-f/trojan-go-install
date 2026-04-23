@@ -256,6 +256,32 @@ else
     echo -e "${YELLOW}[*] 查看日志排查: journalctl -u trojan-go -n 20${NC}"
 fi
 
+# ==================== 创建订阅文件 ====================
+echo -e "${GREEN}[*] 创建订阅文件...${NC}"
+TROJAN_URI="trojan://$TROJAN_PASS@$DOMAIN:443?sni=$DOMAIN#$DOMAIN"
+SUBSCRIPTION_CONTENT=$(echo -n "$TROJAN_URI" | base64 -w 0)
+
+mkdir -p /var/www/html
+echo "$SUBSCRIPTION_CONTENT" > /var/www/html/sub
+
+# 更新 nginx 配置支持订阅
+cat > /etc/nginx/sites-available/default << EOF
+server {
+    listen 80 default_server;
+    server_name ${DOMAIN};
+
+    location / {
+        root /var/www/html;
+    }
+
+    location /sub {
+        default_type text/plain;
+        return 200 "$SUBSCRIPTION_CONTENT";
+    }
+}
+EOF
+nginx -t && systemctl reload nginx
+
 # ==================== 安装完成 ====================
 echo ""
 echo -e "${GREEN}============================================${NC}"
@@ -268,11 +294,11 @@ echo -e "  密码:   ${GREEN}$TROJAN_PASS${NC}"
 echo -e "  端口:   ${GREEN}443${NC}"
 echo -e "  状态:   $STATUS"
 echo ""
-echo -e "${YELLOW}【Trojan URI (导入客户端)】${NC}"
-echo -e "${GREEN}trojan://$TROJAN_PASS@$DOMAIN:443?sni=$DOMAIN#$DOMAIN${NC}"
+echo -e "${YELLOW}【订阅链接】${NC}"
+echo -e "${GREEN}http://$DOMAIN/sub${NC}"
 echo ""
-echo -e "${YELLOW}【Quantumult X 配置】${NC}"
-echo -e "trojan://$TROJAN_PASS@$DOMAIN:443?sni=$DOMAIN#$DOMAIN"
+echo -e "${YELLOW}【Trojan URI】${NC}"
+echo -e "${GREEN}$TROJAN_URI${NC}"
 echo ""
 echo -e "${RED}【请手动完成以下步骤】${NC}"
 echo -e "${RED}1. 在 Cloudflare 开启 Proxy 模式 (DNS -> 橙色云)${NC}"
