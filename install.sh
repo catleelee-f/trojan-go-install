@@ -24,15 +24,15 @@ show_help() {
     echo "用法: bash install.sh [选项]"
     echo ""
     echo "选项:"
-    echo "  -d, --domain DOMAIN       设置域名 (必需)"
-    echo "  -t, --token TOKEN         Cloudflare API Token (必需)"
+    echo "  -d, --domain DOMAIN       设置域名 (可留空交互式输入)"
+    echo "  -t, --token TOKEN         Cloudflare API Token (可留空交互式输入)"
     echo "  -p, --password PASSWORD   Trojan 密码 (留空自动生成)"
     echo "  -s, --ssh-port PORT       SSH 端口 (默认: 22)"
     echo "  -h, --help                显示此帮助信息"
     echo ""
     echo "示例:"
-    echo "  bash install.sh -d vpn.example.com -t YOUR_CF_TOKEN"
-    echo "  bash install.sh --domain vpn.example.com --token YOUR_CF_TOKEN --ssh-port 22"
+    echo "  bash install.sh                                    # 交互式输入"
+    echo "  bash install.sh -d vpn.example.com -t YOUR_CF_TOKEN # 命令行参数"
     echo ""
 }
 
@@ -78,18 +78,25 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
-# ==================== 检查必需参数 ====================
+# ==================== 交互式输入 ====================
+if [[ -z "$DOMAIN" ]]; then
+    echo -e "${YELLOW}[?] 请输入你的域名 (例: vpn.example.com):${NC}"
+    read -p "域名: " DOMAIN
+fi
+
+if [[ -z "$CF_TOKEN" ]]; then
+    echo -e "${YELLOW}[?] 请输入 Cloudflare API Token:${NC}"
+    read -p "Token: " CF_TOKEN
+fi
+
+# ==================== 再次检查 ====================
 if [[ -z "$DOMAIN" ]]; then
     echo -e "${RED}[错误] 域名不能为空${NC}"
-    echo -e "${YELLOW}使用 -d 或 --domain 指定域名${NC}"
-    show_help
     exit 1
 fi
 
 if [[ -z "$CF_TOKEN" ]]; then
     echo -e "${RED}[错误] Cloudflare API Token 不能为空${NC}"
-    echo -e "${YELLOW}使用 -t 或 --token 指定 Token${NC}"
-    show_help
     exit 1
 fi
 
